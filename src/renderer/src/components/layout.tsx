@@ -1,4 +1,4 @@
-import { ChevronRight, Copy, FolderKanban, LayoutDashboard, Minus, MonitorSmartphone, Plus, Search, Settings, Square, Users, X } from 'lucide-react'
+import { ChevronRight, Copy, FolderKanban, LayoutDashboard, Minus, MonitorSmartphone, Network, Plus, Search, Settings, Square, Users, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { PageId } from '@shared/types'
 import logoUrl from '@/assets/logo.png'
@@ -11,6 +11,7 @@ export const PAGE_TITLES: Record<PageId, string> = {
   dashboard: 'Dashboard',
   profiles: 'Perfis',
   groups: 'Grupos',
+  proxies: 'Proxies',
   settings: 'Configurações'
 }
 
@@ -18,6 +19,7 @@ const NAV: { id: PageId; icon: ReactNode }[] = [
   { id: 'dashboard', icon: <LayoutDashboard /> },
   { id: 'profiles', icon: <Users /> },
   { id: 'groups', icon: <FolderKanban /> },
+  { id: 'proxies', icon: <Network /> },
   { id: 'settings', icon: <Settings /> }
 ]
 

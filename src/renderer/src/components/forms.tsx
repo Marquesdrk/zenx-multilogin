@@ -1,17 +1,27 @@
 import { Check, X } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { groupInputSchema, profileInputSchema, type ProfileInput } from '@shared/schemas'
-import { GROUP_COLORS, PLATFORM_META, PLATFORMS, type Platform, type ProfileDTO } from '@shared/types'
+import { GROUP_COLORS, PLATFORM_META, PLATFORMS, PROXY_TYPE_LABEL, type Platform, type ProfileDTO } from '@shared/types'
 import { call, errorMessage } from '@/lib/api'
 import { cn, plural } from '@/lib/utils'
 import { useApp } from '@/store'
 import { PlatformIcon } from './common'
+import { DEFAULT_REGION } from '@shared/region'
+import { parseRegionDraft, RegionSection, regionDraftFrom, type RegionDraft } from './region'
+import { CountryBadge, emptyProxyDraft, locationLabel, ProxyFields, ProxyTester, validateDraft, type ProxyDraft, type ProxyErrors } from './proxy'
 import { Button } from './ui/button'
 import { Dialog, Sheet } from './ui/dialog'
 import { controlClass, Field, Input, Textarea } from './ui/field'
 import { Select } from './ui/menus'
 
 type Errors = Partial<Record<keyof ProfileInput, string>>
+type ProxyMode = 'none' | 'saved' | 'new'
+
+const PROXY_MODES: { value: ProxyMode; label: string }[] = [
+  { value: 'none', label: 'Sem proxy' },
+  { value: 'saved', label: 'Proxy salvo' },
+  { value: 'new', label: 'Novo proxy' }
+]
 
 const emptyProfile: ProfileInput = {
   name: '',
@@ -19,6 +29,8 @@ const emptyProfile: ProfileInput = {
   username: '',
   homeUrl: PLATFORM_META.instagram.url,
   groupId: null,
+  proxyId: null,
+  region: DEFAULT_REGION,
   tags: [],
   notes: ''
 }
@@ -30,6 +42,8 @@ function toInput(profile: ProfileDTO): ProfileInput {
     username: profile.username ?? '',
     homeUrl: profile.homeUrl ?? '',
     groupId: profile.groupId,
+    proxyId: profile.proxyId,
+    region: profile.region,
     tags: profile.tags.map((t) => t.name),
     notes: profile.notes
   }
@@ -86,17 +100,55 @@ export function ProfileFormSheet() {
   const { open, editing } = useApp((s) => s.profileForm)
   const close = useApp((s) => s.closeProfileForm)
   const groups = useApp((s) => s.groups)
+  const proxies = useApp((s) => s.proxies)
   const toast = useApp((s) => s.toast)
   const [values, setValues] = useState<ProfileInput>(emptyProfile)
   const [errors, setErrors] = useState<Errors>({})
   const [saving, setSaving] = useState(false)
+  const [proxyMode, setProxyMode] = useState<ProxyMode>('none')
+  const [proxyDraft, setProxyDraft] = useState<ProxyDraft>(emptyProxyDraft)
+  const [proxyErrors, setProxyErrors] = useState<ProxyErrors>({})
+  const [regionDraft, setRegionDraft] = useState<RegionDraft>(regionDraftFrom(DEFAULT_REGION))
 
   useEffect(() => {
     if (!open) return
     setValues(editing ? toInput(editing) : emptyProfile)
     setErrors({})
     setSaving(false)
+    setProxyMode(editing?.proxyId ? 'saved' : 'none')
+    setProxyDraft(emptyProxyDraft)
+    setProxyErrors({})
+    setRegionDraft(regionDraftFrom(editing?.region ?? DEFAULT_REGION))
   }, [open, editing])
+
+  const changeProxyMode = (mode: ProxyMode): void => {
+    setProxyMode(mode)
+    setErrors((e) => ({ ...e, proxyId: undefined, region: undefined }))
+    // Com proxy, a região passa a seguir o IP dele; sem proxy, volta à do computador.
+    setRegionDraft((r) =>
+      mode !== 'none' && r.mode === 'real' && proxyMode === 'none'
+        ? { ...r, mode: 'proxy' }
+        : mode === 'none' && r.mode === 'proxy'
+          ? { ...r, mode: 'real' }
+          : r
+    )
+  }
+  const selectedProxyCheck =
+    proxyMode === 'saved' && values.proxyId ? (proxies.find((p) => p.id === values.proxyId)?.lastCheck ?? null) : null
+
+  const proxyOptions = useMemo(
+    () =>
+      proxies.map((p) => ({
+        value: p.id,
+        label: `${p.name} · ${PROXY_TYPE_LABEL[p.type]}${p.lastCheck?.ok ? ` · ${locationLabel(p.lastCheck)}` : ''}`,
+        icon: p.lastCheck?.ok ? (
+          <CountryBadge code={p.lastCheck.country} />
+        ) : (
+          <span className={cn('size-1.5 rounded-full', p.lastCheck ? 'bg-danger' : 'bg-white/30')} />
+        )
+      })),
+    [proxies]
+  )
 
   const set = <K extends keyof ProfileInput>(key: K, value: ProfileInput[K]): void => {
     setValues((v) => ({ ...v, [key]: value }))
@@ -133,27 +185,49 @@ export function ProfileFormSheet() {
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault()
     if (saving) return
-    const parsed = profileInputSchema.safeParse(values)
+    const region = parseRegionDraft(regionDraft)
+    // "Novo proxy" ainda não tem id: um id provisório só para validar a regra de região.
+    const PENDING = '00000000-0000-4000-8000-000000000000'
+    const parsed = profileInputSchema.safeParse({
+      ...values,
+      proxyId: proxyMode === 'saved' ? values.proxyId : proxyMode === 'new' ? PENDING : null,
+      region: region.ok ? region.value : DEFAULT_REGION
+    })
+    const next: Errors = {}
+    if (!region.ok) next.region = region.error
     if (!parsed.success) {
-      const next: Errors = {}
       for (const issue of parsed.error.issues) {
         const key = issue.path[0] as keyof ProfileInput
         next[key] ??= issue.message
       }
+    }
+    if (proxyMode === 'saved' && !values.proxyId) next.proxyId = 'Selecione um proxy salvo'
+    const proxy = proxyMode === 'new' ? validateDraft(proxyDraft, false) : null
+    if (proxy && !proxy.ok) setProxyErrors(proxy.errors)
+    if (!parsed.success || next.proxyId || next.region || (proxy && !proxy.ok)) {
       setErrors(next)
       return
     }
     setSaving(true)
     try {
       const store = useApp.getState()
+      const data = { ...parsed.data }
+      if (proxy?.ok) {
+        // "Novo proxy" também entra na biblioteca, para ser reutilizado em outros perfis.
+        const created = await call('proxies:create', proxy.data)
+        data.proxyId = created.id
+        setProxyMode('saved')
+        setValues((v) => ({ ...v, proxyId: created.id }))
+        void store.refreshProxies()
+      }
       if (editing) {
-        await call('profiles:update', { id: editing.id, data: parsed.data })
+        await call('profiles:update', { id: editing.id, data })
         toast('success', 'Perfil atualizado.')
       } else {
-        const created = await call('profiles:create', parsed.data)
+        const created = await call('profiles:create', data)
         store.setJustCreated(created)
       }
-      await Promise.all([store.refreshProfiles(), store.refreshGroups(), store.refreshEvents()])
+      await Promise.all([store.refreshProfiles(), store.refreshGroups(), store.refreshProxies(), store.refreshEvents()])
       close()
     } catch (error) {
       toast('error', errorMessage(error))
@@ -248,6 +322,66 @@ export function ProfileFormSheet() {
             spellCheck={false}
           />
         </Field>
+        <Field label="Proxy" error={errors.proxyId} hint={proxyMode === 'none' ? 'O navegador usa a sua conexão normal.' : undefined}>
+          <div role="radiogroup" aria-label="Modo de proxy" className="grid grid-cols-3 gap-1 rounded-control border border-white/10 bg-white/[0.03] p-1">
+            {PROXY_MODES.map((mode) => (
+              <button
+                key={mode.value}
+                type="button"
+                role="radio"
+                aria-checked={proxyMode === mode.value}
+                onClick={() => changeProxyMode(mode.value)}
+                className={cn(
+                  'no-drag h-8 rounded-[8px] text-[12.5px] font-medium transition-colors duration-150',
+                  proxyMode === mode.value ? 'bg-brand text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.16)]' : 'text-muted hover:bg-white/[0.06] hover:text-white'
+                )}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+        </Field>
+        {proxyMode === 'saved' &&
+          (proxies.length === 0 ? (
+            <p className="-mt-2 text-[12.5px] text-muted">Nenhum proxy salvo ainda. Use “Novo proxy” ou a página Proxies.</p>
+          ) : (
+            <div className="-mt-2">
+              <Select
+                id="profile-proxy"
+                ariaLabel="Proxy salvo"
+                placeholder="Selecione um proxy"
+                value={values.proxyId ?? ''}
+                onChange={(v) => set('proxyId', v)}
+                options={proxyOptions}
+              />
+            </div>
+          ))}
+        {proxyMode === 'new' && (
+          <div className="-mt-1 flex flex-col gap-4 rounded-[14px] border border-white/8 bg-white/[0.025] p-3.5">
+            <ProxyFields
+              idPrefix="profile-proxy"
+              draft={proxyDraft}
+              errors={proxyErrors}
+              showName={false}
+              onChange={(next) => {
+                setProxyDraft(next)
+                setProxyErrors({})
+              }}
+            />
+            <ProxyTester draft={proxyDraft} editingId={null} onErrors={setProxyErrors} />
+            <p className="text-[12px] text-muted/80">Ao salvar, o proxy também fica disponível na página Proxies.</p>
+          </div>
+        )}
+        <RegionSection
+          draft={regionDraft}
+          onChange={(next) => {
+            setRegionDraft(next)
+            setErrors((e) => ({ ...e, region: undefined }))
+          }}
+          error={errors.region}
+          hasProxy={proxyMode !== 'none'}
+          proxyCheck={selectedProxyCheck}
+        />
         <Field label="Grupo" htmlFor="profile-group" optional error={errors.groupId}>
           <Select
             id="profile-group"

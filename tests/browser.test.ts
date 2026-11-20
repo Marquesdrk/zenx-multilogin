@@ -13,8 +13,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { profiles as profilesTable } from '../src/main/db/schema'
 import { BrowserManager, type BrowserLauncher } from '../src/main/services/BrowserManager'
 import { ChromiumLocator } from '../src/main/services/ChromiumLocator'
+import { resolveRegionConfig } from '../src/main/region/resolve'
 import type { BrowserState, ProfileDTO } from '../src/shared/types'
 import { CHROMIUM_ROOT, createTestEnv, profileInput, type TestEnv } from './helpers'
+import { startHttpProxy, startSocks5 } from './proxyServers'
 
 interface Report {
   cookie: string
@@ -43,7 +45,8 @@ let manager: BrowserManager
 let launches: string[]
 const locator = new ChromiumLocator(CHROMIUM_ROOT)
 // Janelas de teste ficam fora da área visível.
-const TEST_ARGS = ['--window-position=-3000,-3000', '--window-size=640,480']
+// Por padrão o Chromium não usa proxy para 127.0.0.1; nos testes a página local precisa passar por ele.
+const TEST_ARGS = ['--window-position=-3000,-3000', '--window-size=640,480', '--proxy-bypass-list=<-loopback>']
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -81,6 +84,7 @@ afterEach(async () => {
 function createManager(overrides: { launcher?: BrowserLauncher; resolveExecutable?: () => Promise<string> } = {}) {
   return new BrowserManager({
     getProfile: (id) => env.profiles.get(id),
+    resolveProxy: (proxyId) => env.proxies.endpoint(proxyId),
     resolveUserDataDir: (id) => {
       const dir = env.profiles.userDataDir(id)
       launches.push(dir)
@@ -267,5 +271,183 @@ describe('BrowserManager', () => {
     expect(existsSync(env.profiles.userDataDir(a.id))).toBe(false)
     expect(manager.getState(b.id).status).toBe('open')
     expect(existsSync(`${env.profiles.userDataDir(b.id)}/Default`)).toBe(true)
+  })
+})
+
+describe('Chromium com proxy', () => {
+  const AUTH = { user: 'perfil01', pass: 'p@ss:word' }
+
+  it('SOCKS5 com usuário e senha: todo o tráfego passa pelo proxy autenticado', async () => {
+    const upstream = await startSocks5(AUTH)
+    try {
+      const proxy = await env.proxies.create({
+        name: 'Residencial',
+        type: 'socks5',
+        host: '127.0.0.1',
+        port: upstream.port,
+        username: AUTH.user,
+        password: AUTH.pass,
+        changeIpUrl: ''
+      })
+      const profile = await createProfile('Com proxy', 'px')
+      await env.profiles.update(profile.id, { ...profileInput({ name: 'Com proxy', homeUrl: '' }), proxyId: proxy.id })
+      await setPage(profile, 'px')
+      await manager.open(profile.id)
+      const report = await waitReport('px')
+      expect(report.webdriver).toBe(false)
+      const port = new URL(base).port
+      expect(upstream.hits.some((h) => h.target === `127.0.0.1:${port}` && h.user === AUTH.user)).toBe(true)
+    } finally {
+      await manager.closeAll()
+      await upstream.close()
+    }
+  })
+
+  it('HTTP sem autenticação: usa o proxy direto, sem ponte local', async () => {
+    const upstream = await startHttpProxy()
+    try {
+      const proxy = await env.proxies.create({
+        name: 'Datacenter',
+        type: 'http',
+        host: '127.0.0.1',
+        port: upstream.port,
+        username: '',
+        changeIpUrl: ''
+      })
+      const profile = await createProfile('HTTP', 'hx')
+      await env.profiles.update(profile.id, { ...profileInput({ name: 'HTTP', homeUrl: '' }), proxyId: proxy.id })
+      await setPage(profile, 'hx')
+      await manager.open(profile.id)
+      await waitReport('hx')
+      const port = new URL(base).port
+      expect(upstream.hits.some((h) => h.target === `127.0.0.1:${port}`)).toBe(true)
+    } finally {
+      await manager.closeAll()
+      await upstream.close()
+    }
+  })
+
+  it('perfil sem proxy não passa por nenhum proxy', async () => {
+    const upstream = await startSocks5()
+    try {
+      const profile = await createProfile('Direto', 'dx')
+      await manager.open(profile.id)
+      await waitReport('dx')
+      expect(upstream.hits).toHaveLength(0)
+    } finally {
+      await upstream.close()
+    }
+  })
+})
+
+describe('Chromium com região simulada', () => {
+  const REGION_PAGE = `<!doctype html><iframe srcdoc="<script>parent.__frameTz = Intl.DateTimeFormat().resolvedOptions().timeZone</script>"></iframe><script>
+    const out = {
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      offset: new Date(Date.UTC(2024, 0, 15, 12)).getTimezoneOffset(),
+      hours: new Date(Date.UTC(2024, 0, 15, 12)).getHours(),
+      text: String(new Date(Date.UTC(2024, 0, 15, 12))),
+      language: navigator.language,
+      languages: navigator.languages,
+      intlLocale: Intl.NumberFormat().resolvedOptions().locale,
+      webdriver: navigator.webdriver,
+      nativeLook: Date.prototype.getHours.toString()
+    }
+    let sent = false
+    const send = () => { if (sent) return; sent = true; out.frameTz = window.__frameTz; fetch('/rreport', { method: 'POST', body: JSON.stringify(out) }) }
+    setTimeout(send, 3000) // sem simulação, a geolocalização real fica aguardando permissão
+    navigator.permissions.query({ name: 'geolocation' }).then((p) => (out.permission = p.state))
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        out.geo = [pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy]
+        setTimeout(send, 200)
+      },
+      (err) => { out.geo = 'erro ' + err.code; send() }
+    )
+  </script>`
+  let regionServer: Server
+  let regionBase: string
+  let received: { body: Record<string, unknown>; acceptLanguage: string } | null = null
+
+  beforeAll(async () => {
+    regionServer = createServer((req, res) => {
+      if (req.url === '/rreport') {
+        let body = ''
+        req.on('data', (c) => (body += c))
+        req.on('end', () => {
+          received = { body: JSON.parse(body), acceptLanguage: String(req.headers['accept-language'] ?? '') }
+          res.end('ok')
+        })
+        return
+      }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      res.end(REGION_PAGE)
+    })
+    await new Promise<void>((ok) => regionServer.listen(0, '127.0.0.1', ok))
+    regionBase = `http://127.0.0.1:${(regionServer.address() as AddressInfo).port}`
+  })
+  afterAll(async () => {
+    await new Promise((ok) => regionServer.close(ok))
+  })
+
+  async function openAndRead(region: ProfileDTO['region']): Promise<NonNullable<typeof received>> {
+    received = null
+    const profile = await env.profiles.create(profileInput({ name: 'Região', homeUrl: '', region }))
+    await env.database.db.update(profilesTable).set({ homeUrl: `${regionBase}/` }).where(eq(profilesTable.id, profile.id))
+    const regional = new BrowserManager({
+      getProfile: (id) => env.profiles.get(id),
+      resolveRegion: async (id) => {
+        const p = await env.profiles.get(id)
+        return p ? resolveRegionConfig(p, (proxyId) => env.proxies.check(proxyId)) : null
+      },
+      resolveUserDataDir: (id) => env.profiles.userDataDir(id),
+      resolveExecutable: () => locator.requireExecutable(),
+      getMaxOpen: async () => 10,
+      markOpened: (id) => env.profiles.markOpened(id),
+      logEvent: (type, message, profileId) => env.events.log(type, message, profileId),
+      extraArgs: TEST_ARGS,
+      allowedProtocols: ['https:', 'http:']
+    })
+    try {
+      await regional.open(profile.id)
+      for (let i = 0; i < 150 && !received; i++) await new Promise((r) => setTimeout(r, 100))
+      if (!received) throw new Error('A página de região não respondeu')
+      return received
+    } finally {
+      await regional.closeAll()
+    }
+  }
+
+  it('aplica fuso, idioma e geolocalização manuais, inclusive em iframes, sem sinal de automação', async () => {
+    const result = await openAndRead({
+      mode: 'manual',
+      timezone: 'Asia/Tokyo',
+      locale: 'ja-JP',
+      latitude: 35.6762,
+      longitude: 139.6503,
+      accuracy: 25
+    })
+    expect(result.body).toMatchObject({
+      tz: 'Asia/Tokyo',
+      frameTz: 'Asia/Tokyo',
+      offset: -540,
+      hours: 21,
+      language: 'ja-JP',
+      languages: ['ja-JP', 'ja'],
+      geo: [35.6762, 139.6503, 25],
+      permission: 'granted',
+      webdriver: false,
+      nativeLook: 'function getHours() { [native code] }'
+    })
+    expect(result.body.text).toContain('GMT+0900')
+    expect(result.body.intlLocale).toMatch(/^ja/)
+    expect(result.acceptLanguage).toMatch(/^ja-JP,ja/)
+  })
+
+  it('modo "do computador" não altera nada', async () => {
+    const result = await openAndRead({ mode: 'real', timezone: null, locale: null, latitude: null, longitude: null, accuracy: null })
+    expect(result.body.tz).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone)
+    expect(result.body.nativeLook).toBe('function getHours() { [native code] }')
+    expect(result.body.geo).not.toEqual([35.6762, 139.6503, 25])
   })
 })

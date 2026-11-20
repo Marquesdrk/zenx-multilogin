@@ -4,6 +4,7 @@ import { DEFAULT_FILTERS, filterProfiles, statusOf, type ProfileFilters, type So
 import { PLATFORM_META, PLATFORMS, type BrowserStatus, type ProfileDTO } from '@shared/types'
 import { EmptyState, GroupChip, PageHeader, PlatformIcon, PlatformStack, STATUS_LABEL, StatusBadge, TagList } from '@/components/common'
 import { ConfirmDialog } from '@/components/forms'
+import { ProxyCell } from '@/components/proxy'
 import { Button } from '@/components/ui/button'
 import { Checkbox, Menu, MenuItem, MenuSeparator, Select } from '@/components/ui/menus'
 import { call, errorMessage } from '@/lib/api'
@@ -12,7 +13,7 @@ import { useApp } from '@/store'
 
 const PAGE_SIZE = 50
 const GRID =
-  'grid grid-cols-[36px_84px_minmax(150px,1.6fr)_minmax(100px,1fr)_minmax(110px,1fr)_minmax(150px,1.3fr)_104px_124px_148px] items-center gap-3 px-4'
+  'grid grid-cols-[36px_84px_minmax(130px,1.6fr)_minmax(80px,1fr)_minmax(90px,1fr)_minmax(110px,1.2fr)_minmax(90px,1fr)_92px_116px_148px] items-center gap-3 px-4'
 
 /** Botão principal da linha: muda conforme o estado real do navegador. */
 export function ProfileAction({ profile, status, subtle }: { profile: ProfileDTO; status: BrowserStatus; subtle?: boolean }) {
@@ -55,6 +56,8 @@ export function ProfilesPage() {
   const [bulkBusy, setBulkBusy] = useState(false)
 
   const groupById = useMemo(() => new Map(groups.map((g) => [g.id, g])), [groups])
+  const proxies = useApp((s) => s.proxies)
+  const proxyById = useMemo(() => new Map(proxies.map((p) => [p.id, p])), [proxies])
   const visible = useMemo(() => filterProfiles(profiles, filters, states), [profiles, filters, states])
   const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE))
   const current = Math.min(page, pageCount - 1)
@@ -268,6 +271,7 @@ export function ProfilesPage() {
           <span>Perfil</span>
           <span>Usuário</span>
           <span>Grupo</span>
+          <span>Proxy</span>
           <span>Tags</span>
           <span>Status</span>
           <span>Última abertura</span>
@@ -311,6 +315,9 @@ export function ProfilesPage() {
                   </span>
                   <span className="min-w-0">
                     <GroupChip group={profile.groupId ? groupById.get(profile.groupId) : undefined} />
+                  </span>
+                  <span className="min-w-0 text-[12.5px]">
+                    <ProxyCell proxy={profile.proxyId ? proxyById.get(profile.proxyId) : undefined} />
                   </span>
                   <TagList tags={profile.tags} />
                   <StatusBadge status={status} title={state?.error} />

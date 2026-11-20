@@ -3,7 +3,7 @@
  * (out/), com uma pasta de dados temporária, e exercita o fluxo principal pela interface.
  * Requer `npm run build` antes (o script `npm test` já faz isso).
  */
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -157,6 +157,47 @@ describe('aplicativo desktop', () => {
     await row.getByRole('button', { name: 'Abrir', exact: true }).waitFor({ timeout: 30_000 })
     expect(await row.innerText()).toContain('Fechado')
     expect(await row.innerText()).not.toContain('Nunca')
+  })
+
+  it('adiciona proxy colando a linha, guarda a senha cifrada e vincula ao perfil', async () => {
+    await page.getByRole('navigation').getByRole('button', { name: /Proxies/ }).click()
+    await page.getByText('Nenhum proxy salvo').waitFor()
+    await page.getByRole('button', { name: 'Adicionar proxy', exact: true }).click()
+    await page.locator('#proxy-paste').fill('127.0.0.1:9:cliente01:segredo123')
+    await page.locator('#proxy-paste').press('Enter')
+    expect(await page.locator('#proxy-host').inputValue()).toBe('127.0.0.1')
+    expect(await page.locator('#proxy-port').inputValue()).toBe('9')
+    expect(await page.locator('#proxy-user').inputValue()).toBe('cliente01')
+    await page.locator('#proxy-name').fill('Residencial E2E')
+    // A porta 9 está fechada: a verificação mostra o erro sem travar o formulário.
+    await page.getByRole('button', { name: 'Verificar proxy' }).click()
+    await page.getByText(/recusada|não respondeu|encerrou/).waitFor({ timeout: 20_000 })
+    await page.getByRole('button', { name: 'Adicionar proxy', exact: true }).click()
+    await expect.poll(() => page.getByTestId('proxy-row').count()).toBe(1)
+    expect(await page.getByTestId('proxy-row').first().innerText()).toContain('Residencial E2E')
+
+    const db = [join(dataDir, 'database', 'zenx.db'), join(dataDir, 'database', 'zenx.db-wal')]
+      .filter((file) => existsSync(file))
+      .map((file) => readFileSync(file).toString('latin1'))
+      .join('')
+    expect(db).not.toContain('segredo123')
+
+    await page.getByRole('navigation').getByRole('button', { name: /Perfis/ }).click()
+    const row = page.getByTestId('profile-row').first()
+    await row.getByRole('button', { name: /Mais ações/ }).click()
+    await page.getByRole('menuitem', { name: 'Editar' }).click()
+    await page.getByRole('radio', { name: 'Proxy salvo' }).click()
+    await page.getByRole('combobox', { name: 'Proxy salvo' }).click()
+    await page.getByRole('option', { name: /Residencial E2E/ }).click()
+    // Escolher um proxy faz a região seguir o IP dele.
+    expect(await page.getByRole('radio', { name: /Pelo IP do proxy/ }).getAttribute('aria-checked')).toBe('true')
+    await page.getByRole('button', { name: 'Salvar alterações' }).click()
+    await expect.poll(() => row.innerText()).toContain('Residencial E2E')
+
+    // Proxy fora do ar: o navegador não abre, para não expor a localização real.
+    await row.getByRole('button', { name: 'Abrir', exact: true }).click()
+    await page.getByText(/O proxy não respondeu/).first().waitFor({ timeout: 30_000 })
+    expect(await row.innerText()).toContain('Erro')
   })
 
   it('não gera erros de console nem violações de CSP', () => {

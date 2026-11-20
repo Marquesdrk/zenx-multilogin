@@ -4,11 +4,13 @@ import { useEffect } from 'react'
 import type { PageId } from '@shared/types'
 import { Toaster } from './components/common'
 import { ClosePromptDialog, GroupFormDialog, JustCreatedDialog, ProfileFormSheet } from './components/forms'
+import { ProxyFormDialog, ProxyImportDialog } from './components/proxy'
 import { Sidebar, TopBar } from './components/layout'
 import { subscribe } from './lib/api'
 import { DashboardPage } from './pages/DashboardPage'
 import { GroupsPage } from './pages/GroupsPage'
 import { ProfilesPage } from './pages/ProfilesPage'
+import { ProxiesPage } from './pages/ProxiesPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { useApp } from './store'
 
@@ -16,6 +18,7 @@ const pages: Record<PageId, () => React.JSX.Element> = {
   dashboard: DashboardPage,
   profiles: ProfilesPage,
   groups: GroupsPage,
+  proxies: ProxiesPage,
   settings: SettingsPage
 }
 
@@ -73,6 +76,8 @@ export function App() {
       </div>
       <ProfileFormSheet />
       <GroupFormDialog />
+      <ProxyFormDialog />
+      <ProxyImportDialog />
       <JustCreatedDialog />
       <ClosePromptDialog />
       <Toaster />

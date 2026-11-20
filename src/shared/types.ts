@@ -24,6 +24,59 @@ export const GROUP_COLORS = [
   '#FFFFFF'
 ] as const
 
+import type { RegionSettings } from './region'
+
+export const PROXY_TYPES = ['http', 'https', 'socks5'] as const
+export type ProxyType = (typeof PROXY_TYPES)[number]
+
+export const PROXY_TYPE_LABEL: Record<ProxyType, string> = {
+  http: 'HTTP',
+  https: 'HTTPS',
+  socks5: 'SOCKS5'
+}
+
+/** Resultado da verificação de um proxy (IP de saída e localização). */
+export interface ProxyCheck {
+  ok: boolean
+  checkedAt: number
+  ip: string | null
+  country: string | null
+  region: string | null
+  city: string | null
+  timezone: string | null
+  latitude: number | null
+  longitude: number | null
+  latencyMs: number | null
+  error: string | null
+}
+
+export interface ProxyDTO {
+  id: string
+  name: string
+  type: ProxyType
+  host: string
+  port: number
+  username: string | null
+  /** A senha nunca sai do processo principal; o painel só sabe se existe. */
+  hasPassword: boolean
+  changeIpUrl: string | null
+  createdAt: number
+  updatedAt: number
+  profileCount: number
+  lastCheck: ProxyCheck | null
+}
+
+export interface ProxyImportResult {
+  created: number
+  skipped: number
+}
+
+export interface ChangeIpResult {
+  ok: boolean
+  status: number | null
+  message: string
+}
+
 export interface TagDTO {
   id: string
   name: string
@@ -38,6 +91,8 @@ export interface ProfileDTO {
   username: string | null
   homeUrl: string | null
   groupId: string | null
+  proxyId: string | null
+  region: RegionSettings
   notes: string
   tags: TagDTO[]
   createdAt: number
@@ -62,7 +117,10 @@ export const EVENT_TYPES = [
   'browser_closed',
   'browser_failed',
   'group_created',
-  'group_deleted'
+  'group_deleted',
+  'proxy_created',
+  'proxy_updated',
+  'proxy_deleted'
 ] as const
 export type EventType = (typeof EVENT_TYPES)[number]
 
@@ -83,7 +141,7 @@ export interface BrowserState {
 
 export type BrowserStates = Record<string, BrowserState>
 
-export const PAGES = ['dashboard', 'profiles', 'groups', 'settings'] as const
+export const PAGES = ['dashboard', 'profiles', 'groups', 'proxies', 'settings'] as const
 export type PageId = (typeof PAGES)[number]
 
 export interface Settings {

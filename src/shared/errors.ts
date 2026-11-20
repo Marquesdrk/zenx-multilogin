@@ -5,6 +5,7 @@ export type AppErrorCode =
   | 'LIMIT_REACHED'
   | 'CHROMIUM_MISSING'
   | 'LAUNCH_FAILED'
+  | 'PROXY_FAILED'
   | 'FORBIDDEN'
   | 'INTERNAL'
 

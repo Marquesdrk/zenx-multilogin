@@ -12,6 +12,7 @@ import {
   type GroupDTO,
   type PageId,
   type ProfileDTO,
+  type ProxyDTO,
   type Settings
 } from '@shared/types'
 import { call, errorMessage } from './lib/api'
@@ -29,6 +30,7 @@ interface AppState {
   page: PageId
   profiles: ProfileDTO[]
   groups: GroupDTO[]
+  proxies: ProxyDTO[]
   events: EventDTO[]
   states: BrowserStates
   settings: Settings
@@ -38,6 +40,8 @@ interface AppState {
   toasts: Toast[]
   profileForm: { open: boolean; editing: ProfileDTO | null }
   groupForm: { open: boolean; editing: GroupDTO | null }
+  proxyForm: { open: boolean; editing: ProxyDTO | null }
+  proxyImportOpen: boolean
   /** Perfil recém-criado, para oferecer a abertura imediata do navegador. */
   justCreated: ProfileDTO | null
   closePrompt: { openCount: number } | null
@@ -46,6 +50,12 @@ interface AppState {
   navigate(page: PageId): void
   refreshProfiles(): Promise<void>
   refreshGroups(): Promise<void>
+  refreshProxies(): Promise<void>
+  /** Substitui um proxy na lista (ex.: após verificação). */
+  putProxy(proxy: ProxyDTO): void
+  openProxyForm(editing?: ProxyDTO | null): void
+  closeProxyForm(): void
+  setProxyImportOpen(open: boolean): void
   refreshEvents(): Promise<void>
   setFilters(patch: Partial<ProfileFilters>): void
   updateSettings(patch: SettingsPatch): Promise<void>
@@ -79,6 +89,7 @@ export const useApp = create<AppState>((set, get) => ({
   page: 'dashboard',
   profiles: [],
   groups: [],
+  proxies: [],
   events: [],
   states: {},
   settings: DEFAULT_SETTINGS,
@@ -88,15 +99,18 @@ export const useApp = create<AppState>((set, get) => ({
   toasts: [],
   profileForm: { open: false, editing: null },
   groupForm: { open: false, editing: null },
+  proxyForm: { open: false, editing: null },
+  proxyImportOpen: false,
   justCreated: null,
   closePrompt: null,
 
   async init() {
     try {
-      const [settings, profiles, groups, events, states, appInfo, chromium] = await Promise.all([
+      const [settings, profiles, groups, proxies, events, states, appInfo, chromium] = await Promise.all([
         call('settings:get'),
         call('profiles:list'),
         call('groups:list'),
+        call('proxies:list'),
         call('events:list', { limit: 30 }),
         call('browser:states'),
         call('app:info'),
@@ -106,6 +120,7 @@ export const useApp = create<AppState>((set, get) => ({
         settings,
         profiles,
         groups,
+        proxies,
         events,
         states,
         appInfo,
@@ -129,6 +144,21 @@ export const useApp = create<AppState>((set, get) => ({
   },
   async refreshGroups() {
     set({ groups: await call('groups:list') })
+  },
+  async refreshProxies() {
+    set({ proxies: await call('proxies:list') })
+  },
+  putProxy(proxy) {
+    set((s) => ({ proxies: s.proxies.map((p) => (p.id === proxy.id ? proxy : p)) }))
+  },
+  openProxyForm(editing = null) {
+    set({ proxyForm: { open: true, editing } })
+  },
+  closeProxyForm() {
+    set((s) => ({ proxyForm: { ...s.proxyForm, open: false } }))
+  },
+  setProxyImportOpen(open) {
+    set({ proxyImportOpen: open })
   },
   async refreshEvents() {
     set({ events: await call('events:list', { limit: 30 }) })

@@ -1,4 +1,4 @@
-import { Activity, CircleAlert, CirclePlay, CircleStop, FolderKanban, FolderPlus, History, MonitorPlay, MonitorX, Plus, Rows3, UserPlus, Users } from 'lucide-react'
+import { Activity, CircleAlert, CirclePlay, CircleStop, FolderKanban, FolderPlus, History, MonitorPlay, MonitorX, Network, Plus, Rows3, UserPlus, Users } from 'lucide-react'
 import { useMemo, type ReactNode } from 'react'
 import { statusOf } from '@shared/filters'
 import type { EventType } from '@shared/types'
@@ -59,7 +59,10 @@ const eventIcon: Record<EventType, { icon: ReactNode; className: string }> = {
   browser_closed: { icon: <CircleStop />, className: 'text-muted' },
   browser_failed: { icon: <CircleAlert />, className: 'text-danger' },
   group_created: { icon: <FolderPlus />, className: 'text-brand-soft' },
-  group_deleted: { icon: <FolderKanban />, className: 'text-muted' }
+  group_deleted: { icon: <FolderKanban />, className: 'text-muted' },
+  proxy_created: { icon: <Network />, className: 'text-brand-soft' },
+  proxy_updated: { icon: <Network />, className: 'text-muted' },
+  proxy_deleted: { icon: <Network />, className: 'text-muted' }
 }
 
 export function DashboardPage() {

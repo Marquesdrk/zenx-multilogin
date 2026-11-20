@@ -4,7 +4,8 @@ import { asc, desc, eq, inArray, notInArray, sql } from 'drizzle-orm'
 import { AppError } from '@shared/errors'
 import { profileInputSchema, type ProfileInput } from '@shared/schemas'
 import { GROUP_COLORS, PLATFORMS, type Platform, type ProfileDTO, type TagDTO } from '@shared/types'
-import { groups, profilePlatforms, profiles, profileTags, tags } from '../db/schema'
+import { REGION_MODES, type RegionMode, type RegionSettings } from '@shared/region'
+import { groups, profilePlatforms, profiles, profileTags, proxies, tags } from '../db/schema'
 import {
   assertInside,
   assertUuid,
@@ -95,6 +96,8 @@ export class ProfileManager {
         username: data.username || null,
         homeUrl: data.homeUrl || null,
         groupId: data.groupId,
+        proxyId: data.proxyId,
+        ...regionColumns(data.region),
         notes: data.notes,
         updatedAt: Date.now()
       })
@@ -117,6 +120,8 @@ export class ProfileManager {
       username: source.username ?? '',
       homeUrl: source.homeUrl ?? '',
       groupId: source.groupId,
+      proxyId: source.proxyId,
+      region: source.region,
       tags: source.tags.map((t) => t.name),
       notes: source.notes
     })
@@ -162,6 +167,10 @@ export class ProfileManager {
       const [group] = await this.db.select({ id: groups.id }).from(groups).where(eq(groups.id, data.groupId))
       if (!group) throw new AppError('VALIDATION', 'O grupo selecionado não existe mais.')
     }
+    if (data.proxyId) {
+      const [proxy] = await this.db.select({ id: proxies.id }).from(proxies).where(eq(proxies.id, data.proxyId))
+      if (!proxy) throw new AppError('VALIDATION', 'O proxy selecionado não existe mais.')
+    }
     return data
   }
 
@@ -176,6 +185,8 @@ export class ProfileManager {
       username: data.username || null,
       homeUrl: data.homeUrl || null,
       groupId: data.groupId,
+      proxyId: data.proxyId,
+      ...regionColumns(data.region),
       notes: data.notes,
       dataDir: relativeDataDir(id),
       createdAt: now,
@@ -238,11 +249,36 @@ export class ProfileManager {
       username: row.username,
       homeUrl: row.homeUrl,
       groupId: row.groupId,
+      proxyId: row.proxyId,
+      region: regionFromRow(row),
       notes: row.notes,
       tags: [...rowTags].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       lastOpenedAt: row.lastOpenedAt
     }
+  }
+}
+
+function regionColumns(region: RegionSettings) {
+  return {
+    regionMode: region.mode,
+    regionTimezone: region.timezone,
+    regionLocale: region.locale,
+    regionLatitude: region.latitude,
+    regionLongitude: region.longitude,
+    regionAccuracy: region.accuracy
+  }
+}
+
+function regionFromRow(row: ProfileRow): RegionSettings {
+  const mode = (REGION_MODES as readonly string[]).includes(row.regionMode) ? (row.regionMode as RegionMode) : 'real'
+  return {
+    mode,
+    timezone: row.regionTimezone,
+    locale: row.regionLocale,
+    latitude: row.regionLatitude,
+    longitude: row.regionLongitude,
+    accuracy: row.regionAccuracy
   }
 }

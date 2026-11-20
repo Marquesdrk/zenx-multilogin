@@ -2,15 +2,19 @@
  * Contrato IPC entre o renderer (React) e o processo principal.
  * Este arquivo não importa Zod nem módulos Node: é seguro para o preload em sandbox.
  */
-import type { GroupInput, ProfileInput, SettingsPatch } from './schemas'
+import type { GroupInput, ProfileInput, ProxyImport, ProxyInput, SettingsPatch } from './schemas'
 import type {
   AppInfo,
   BrowserState,
   BrowserStates,
+  ChangeIpResult,
   ChromiumInfo,
   EventDTO,
   GroupDTO,
   ProfileDTO,
+  ProxyCheck,
+  ProxyDTO,
+  ProxyImportResult,
   Settings,
   TagDTO
 } from './types'
@@ -27,6 +31,14 @@ export interface IpcApi {
   'groups:update': [{ id: string; data: GroupInput }, GroupDTO]
   'groups:delete': [{ id: string }, void]
   'tags:list': [void, TagDTO[]]
+  'proxies:list': [void, ProxyDTO[]]
+  'proxies:create': [ProxyInput, ProxyDTO]
+  'proxies:update': [{ id: string; data: ProxyInput }, ProxyDTO]
+  'proxies:delete': [{ id: string }, void]
+  'proxies:import': [ProxyImport, ProxyImportResult]
+  'proxies:check': [{ id: string }, ProxyDTO]
+  'proxies:test': [{ data: ProxyInput; id: string | null }, ProxyCheck]
+  'proxies:changeIp': [{ id: string }, ChangeIpResult]
   'events:list': [{ limit: number }, EventDTO[]]
   'browser:states': [void, BrowserStates]
   'browser:open': [{ id: string }, BrowserState]
@@ -61,6 +73,14 @@ export const IPC_CHANNELS = [
   'groups:update',
   'groups:delete',
   'tags:list',
+  'proxies:list',
+  'proxies:create',
+  'proxies:update',
+  'proxies:delete',
+  'proxies:import',
+  'proxies:check',
+  'proxies:test',
+  'proxies:changeIp',
   'events:list',
   'browser:states',
   'browser:open',

@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { app, BrowserWindow, dialog, session, shell, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron'
 import { AppError } from '@shared/errors'
 import type { IpcEventName, IpcEvents } from '@shared/ipc'
 import type { BrowserState } from '@shared/types'
@@ -11,7 +11,10 @@ import { ChromiumLocator } from './services/ChromiumLocator'
 import { DatabaseService } from './services/DatabaseService'
 import { EventLogger } from './services/EventLogger'
 import { GroupManager } from './services/GroupManager'
+import { electronSecretStore } from './proxy/secrets'
+import { resolveRegionConfig } from './region/resolve'
 import { ProfileManager } from './services/ProfileManager'
+import { ProxyManager } from './services/ProxyManager'
 import { SettingsService } from './services/SettingsService'
 
 const APP_NAME = 'Zenx MultiLogin'
@@ -69,9 +72,15 @@ async function bootstrap(): Promise<void> {
   const settings = new SettingsService(database.db)
   const profiles = new ProfileManager(database.db, paths, events)
   const groups = new GroupManager(database.db, events)
+  const proxyManager = new ProxyManager(database.db, electronSecretStore(safeStorage), events)
   const chromium = new ChromiumLocator(paths.chromiumRoot)
   const browsers = new BrowserManager({
     getProfile: (id) => profiles.get(id),
+    resolveProxy: (proxyId) => proxyManager.endpoint(proxyId),
+    resolveRegion: async (id) => {
+      const profile = await profiles.get(id)
+      return profile ? resolveRegionConfig(profile, (proxyId) => proxyManager.check(proxyId)) : null
+    },
     resolveUserDataDir: (id) => profiles.userDataDir(id),
     resolveExecutable: () => chromium.requireExecutable(),
     getMaxOpen: async () => (await settings.get()).maxConcurrentBrowsers,
@@ -101,6 +110,14 @@ async function bootstrap(): Promise<void> {
       'groups:update': ({ id, data }) => groups.update(id, data),
       'groups:delete': ({ id }) => groups.delete(id),
       'tags:list': () => profiles.listTags(),
+      'proxies:list': () => proxyManager.list(),
+      'proxies:create': (input) => proxyManager.create(input),
+      'proxies:update': ({ id, data }) => proxyManager.update(id, data),
+      'proxies:delete': ({ id }) => proxyManager.delete(id),
+      'proxies:import': (input) => proxyManager.importList(input),
+      'proxies:check': ({ id }) => proxyManager.check(id),
+      'proxies:test': ({ data, id }) => proxyManager.test(data, id ?? undefined),
+      'proxies:changeIp': ({ id }) => proxyManager.changeIp(id),
       'events:list': ({ limit }) => events.list(limit),
       'browser:states': () => browsers.getStates(),
       'browser:open': ({ id }) => browsers.open(id),

@@ -8,6 +8,8 @@ import {
   idSchema,
   idsPayloadSchema,
   profileInputSchema,
+  proxyImportSchema,
+  proxyInputSchema,
   settingsPatchSchema
 } from '@shared/schemas'
 
@@ -28,6 +30,14 @@ const inputSchemas: { [K in IpcChannel]: z.ZodType<IpcApi[K][0]> } = {
   'groups:update': z.object({ id: idSchema, data: groupInputSchema }),
   'groups:delete': idPayloadSchema,
   'tags:list': none,
+  'proxies:list': none,
+  'proxies:create': proxyInputSchema,
+  'proxies:update': z.object({ id: idSchema, data: proxyInputSchema }),
+  'proxies:delete': idPayloadSchema,
+  'proxies:import': proxyImportSchema,
+  'proxies:check': idPayloadSchema,
+  'proxies:test': z.object({ data: proxyInputSchema, id: idSchema.nullable() }),
+  'proxies:changeIp': idPayloadSchema,
   'events:list': z.object({ limit: z.number().int().min(1).max(200) }),
   'browser:states': none,
   'browser:open': idPayloadSchema,

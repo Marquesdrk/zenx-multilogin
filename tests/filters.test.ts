@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_FILTERS, filterProfiles } from '../src/shared/filters'
 import type { BrowserStates, ProfileDTO } from '../src/shared/types'
+import { DEFAULT_REGION } from '../src/shared/region'
 
 const make = (over: Partial<ProfileDTO>): ProfileDTO => ({
   id: 'x',
@@ -9,6 +10,8 @@ const make = (over: Partial<ProfileDTO>): ProfileDTO => ({
   username: null,
   homeUrl: null,
   groupId: null,
+  proxyId: null,
+  region: DEFAULT_REGION,
   notes: '',
   tags: [],
   createdAt: 0,

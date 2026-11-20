@@ -4,6 +4,9 @@ import { mkdir } from 'node:fs/promises'
 import { AppError } from '@shared/errors'
 import type { BrowserState, BrowserStates, EventType } from '@shared/types'
 import { assertUuid } from '../paths'
+import { ProxyBridge } from '../proxy/bridge'
+import type { ProxyEndpoint } from '../proxy/tunnel'
+import { prepareRegion, type RegionConfig } from '../region/region'
 
 /** Processo de navegador em execução. */
 export interface BrowserProcess {
@@ -27,7 +30,13 @@ export interface LaunchRequest {
 export type BrowserLauncher = (request: LaunchRequest) => Promise<BrowserProcess>
 
 export interface BrowserManagerDeps {
-  getProfile(id: string): Promise<{ id: string; name: string; homeUrl: string | null } | null>
+  getProfile(
+    id: string
+  ): Promise<{ id: string; name: string; homeUrl: string | null; proxyId?: string | null } | null>
+  /** Credenciais do proxy (somente em memória). Sem esta função, perfis abrem sem proxy. */
+  resolveProxy?(proxyId: string): Promise<ProxyEndpoint>
+  /** Fuso, idioma e geolocalização do perfil. Nulo = os do computador. */
+  resolveRegion?(profileId: string): Promise<RegionConfig | null>
   resolveUserDataDir(id: string): string
   resolveExecutable(): Promise<string>
   getMaxOpen(): Promise<number>
@@ -47,6 +56,7 @@ interface Entry {
   process?: BrowserProcess
   starting?: Promise<BrowserState>
   closed?: boolean
+  bridge?: ProxyBridge
 }
 
 const CLOSED: BrowserState = { status: 'closed' }
@@ -82,6 +92,35 @@ if ([ZenxWindow]::IsIconic($h)) { [ZenxWindow]::ShowWindowAsync($h, 9) | Out-Nul
 [ZenxWindow]::keybd_event(0x12, 0, 0, 0); [ZenxWindow]::keybd_event(0x12, 0, 2, 0)
 [ZenxWindow]::SetForegroundWindow($h) | Out-Null
 `
+}
+
+/**
+ * Argumentos de proxy do Chromium. Proxies com usuário e senha passam por uma
+ * ponte SOCKS5 local (o Chromium não aceita credenciais na linha de comando).
+ */
+export async function proxyLaunchArgs(proxy: ProxyEndpoint): Promise<{ args: string[]; bridge?: ProxyBridge }> {
+  let server: string
+  let proxyHost: string
+  let bridge: ProxyBridge | undefined
+  if (proxy.username) {
+    bridge = new ProxyBridge(proxy)
+    const port = await bridge.start()
+    server = `socks5://127.0.0.1:${port}`
+    proxyHost = '127.0.0.1'
+  } else {
+    server = `${proxy.type}://${proxy.host}:${proxy.port}`
+    proxyHost = proxy.host
+  }
+  return {
+    bridge,
+    args: [
+      `--proxy-server=${server}`,
+      // Nomes são resolvidos pelo proxy, nunca pelo DNS local (evita vazamento de DNS).
+      `--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE ${proxyHost}`,
+      // WebRTC não pode usar UDP fora do proxy (evita vazamento do IP real).
+      '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'
+    ]
+  }
 }
 
 /**
@@ -249,9 +288,24 @@ export class BrowserManager extends EventEmitter {
       await mkdir(userDataDir, { recursive: true })
       const executablePath = await this.deps.resolveExecutable()
 
+      let proxyArgs: string[] = []
+      if (profile.proxyId && this.deps.resolveProxy) {
+        const proxy = await this.deps.resolveProxy(profile.proxyId)
+        const built = await proxyLaunchArgs(proxy)
+        proxyArgs = built.args
+        entry.bridge = built.bridge
+      }
+      const region = this.deps.resolveRegion ? await this.deps.resolveRegion(id) : null
+      const regionArgs = await prepareRegion(userDataDir, region)
+
       await this.acquireSlot()
       try {
-        entry.process = await this.launcher({ executablePath, userDataDir, url, extraArgs: this.extraArgs })
+        entry.process = await this.launcher({
+          executablePath,
+          userDataDir,
+          url,
+          extraArgs: [...this.extraArgs, ...proxyArgs, ...regionArgs]
+        })
       } finally {
         this.releaseSlot()
       }
@@ -274,6 +328,7 @@ export class BrowserManager extends EventEmitter {
       }
       const running = entry.process
       entry.closed = true
+      void entry.bridge?.stop()
       // Limite atingido ou perfil inexistente não são falhas do navegador:
       // o perfil simplesmente volta a "Fechado".
       if (appError.code === 'LIMIT_REACHED' || appError.code === 'NOT_FOUND') {
@@ -333,6 +388,7 @@ export class BrowserManager extends EventEmitter {
   private handleClosed(id: string, entry: Entry, name: string | null): void {
     if (entry.closed) return
     entry.closed = true
+    void entry.bridge?.stop()
     if (this.entries.get(id) === entry) {
       this.entries.delete(id)
       this.emitState(id)
